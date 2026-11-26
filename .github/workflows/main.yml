@@ -78,6 +78,7 @@ jobs:
                 ...process.env,
                 NODE_ENV: "production",
                 ELECTRON_RUN_AS_NODE: "1",
+                HOST: "127.0.0.1",
                 PORT: process.env.PORT || "3000"
               },
               stdio: ["ignore", out, out]
@@ -116,7 +117,7 @@ jobs:
             try {
               startBackend();
               const port = process.env.PORT || "3000";
-              await waitForServer(`http://localhost:${port}`);
+              await waitForServer(`http://127.0.0.1:${port}`);
 
               const win = new BrowserWindow({
                 width: 1150,
@@ -124,7 +125,7 @@ jobs:
                 autoHideMenuBar: true,
                 title: "ONDAS"
               });
-              win.loadURL(`http://localhost:${port}`);
+              win.loadURL(`http://127.0.0.1:${port}`);
             } catch (err) {
               dialog.showErrorBox("Error al iniciar ONDAS", err.message || String(err));
             }
