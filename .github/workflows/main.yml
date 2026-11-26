@@ -8,6 +8,9 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Descargar código
@@ -16,16 +19,16 @@ jobs:
       - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Instalar dependencias y compilar frontend
         run: |
-          npm ci
+          npm install
           npm run build
 
       - name: Preparar aplicación Electron con servidor Express incluido
         run: |
-          mkdir electron-app
+          mkdir -p electron-app
           cp -r dist electron-app/dist
           cp server.ts electron-app/server.ts
           cp package.json electron-app/package.json
