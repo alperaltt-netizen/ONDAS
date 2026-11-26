@@ -1,0 +1,6 @@
+{
+  "name": "Ondas — Reproductor de Audio y Podcasts",
+  "description": "Reproductor simple de audio y podcasts con modo oscuro, listas personalizadas, guardado automático de progreso, importación por carpeta y descarga de portadas desde Google.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

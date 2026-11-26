@@ -1,0 +1,203 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOwner(userId) {
+      return isVerified() && request.auth.uid == userId;
+    }
+
+    function userDocExists(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'theme', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'email', 'photoURL',
+          'theme', 'playbackRate', 'volume', 'lastTrackId',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.theme in ['dark', 'light']
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 120))
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
+        && (!('playbackRate' in data) || (data.playbackRate is number && data.playbackRate >= 0.5 && data.playbackRate <= 3))
+        && (!('volume' in data) || (data.volume is number && data.volume >= 0 && data.volume <= 1))
+        && (!('lastTrackId' in data) || (data.lastTrackId is string && data.lastTrackId.size() <= 128))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTrack(data, userId, trackId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'title', 'fileName',
+          'duration', 'currentTime', 'completed', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'title', 'artist', 'album', 'folderName',
+          'fileName', 'duration', 'currentTime', 'completed', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == trackId
+        && isValidId(data.ownerId)
+        && data.ownerId == userId
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 220
+        && (!('artist' in data) || (data.artist is string && data.artist.size() <= 160))
+        && (!('album' in data) || (data.album is string && data.album.size() <= 160))
+        && (!('folderName' in data) || (data.folderName is string && data.folderName.size() <= 160))
+        && data.duration is number && data.duration >= 0 && data.duration <= 864000
+        && data.currentTime is number && data.currentTime >= 0 && data.currentTime <= 864000
+        && data.completed is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPlaylist(data, userId, playlistId) {
+      return data.keys().hasAll(['id', 'ownerId', 'name', 'trackIds', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'name', 'trackIds', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.id == playlistId
+        && isValidId(data.ownerId)
+        && data.ownerId == userId
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.trackIds is list
+        && data.trackIds.size() <= 500
+        && (data.trackIds.size() == 0 || (data.trackIds[0] is string && data.trackIds[0].size() <= 128))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTranscription(data, userId, transcriptionId) {
+      return data.keys().hasAll(['id', 'ownerId', 'title', 'text', 'durationSec', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'title', 'text', 'durationSec', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.id == transcriptionId
+        && isValidId(data.ownerId)
+        && data.ownerId == userId
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 180
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 20000
+        && data.durationSec is number && data.durationSec >= 0 && data.durationSec <= 3600
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'email', 'photoURL',
+          'theme', 'playbackRate', 'volume', 'lastTrackId', 'updatedAt'
+        ]);
+      allow delete: if isValidId(userId) && isOwner(userId);
+
+      match /tracks/{trackId} {
+        allow get: if isValidId(userId) && isValidId(trackId) && isOwner(userId) && userDocExists(userId);
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(trackId)
+          && isOwner(userId)
+          && isValidTrack(incoming(), userId, trackId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && userDocExists(userId);
+        allow update: if isValidId(userId) && isValidId(trackId)
+          && isOwner(userId)
+          && isValidTrack(incoming(), userId, trackId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'artist', 'album', 'folderName',
+            'duration', 'currentTime', 'completed', 'updatedAt'
+          ])
+          && userDocExists(userId);
+        allow delete: if isValidId(userId) && isValidId(trackId) && isOwner(userId) && userDocExists(userId);
+      }
+
+      match /playlists/{playlistId} {
+        allow get: if isValidId(userId) && isValidId(playlistId) && isOwner(userId) && userDocExists(userId);
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(playlistId)
+          && isOwner(userId)
+          && isValidPlaylist(incoming(), userId, playlistId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && userDocExists(userId);
+        allow update: if isValidId(userId) && isValidId(playlistId)
+          && isOwner(userId)
+          && isValidPlaylist(incoming(), userId, playlistId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'trackIds', 'updatedAt'
+          ])
+          && userDocExists(userId);
+        allow delete: if isValidId(userId) && isValidId(playlistId) && isOwner(userId) && userDocExists(userId);
+      }
+
+      match /transcriptions/{transcriptionId} {
+        allow get: if isValidId(userId) && isValidId(transcriptionId) && isOwner(userId) && userDocExists(userId);
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(transcriptionId)
+          && isOwner(userId)
+          && isValidTranscription(incoming(), userId, transcriptionId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && userDocExists(userId);
+        allow update: if isValidId(userId) && isValidId(transcriptionId)
+          && isOwner(userId)
+          && isValidTranscription(incoming(), userId, transcriptionId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'text', 'updatedAt'
+          ])
+          && userDocExists(userId);
+        allow delete: if isValidId(userId) && isValidId(transcriptionId) && isOwner(userId) && userDocExists(userId);
+      }
+    }
+  }
+}
