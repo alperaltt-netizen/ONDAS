@@ -30,9 +30,9 @@ jobs:
         run: |
           mkdir -p electron-app
           cp -r dist electron-app/dist
+          cp server.ts electron-app/server.ts
           cp package.json electron-app/package.json
-
-          npx esbuild server.ts --bundle --platform=node --format=cjs --outfile=electron-app/server-bundle.cjs
+          cp -r node_modules electron-app/node_modules
 
           cd electron-app
           npm install --no-save --no-package-lock --legacy-peer-deps electron electron-builder
@@ -42,11 +42,10 @@ jobs:
             const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
             pkg.name = "ondas-player";
             pkg.main = "electron-main.cjs";
-            delete pkg.type;
             pkg.build = {
               appId: "com.ondas.player",
               productName: "ONDAS",
-              asarUnpack: ["server-bundle.cjs"],
+              asar: false,
               win: { target: "portable" }
             };
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
@@ -54,15 +53,16 @@ jobs:
 
           cat << 'EOF' > electron-main.cjs
           const { app, BrowserWindow } = require("electron");
-          const { fork } = require("child_process");
+          const { spawn } = require("child_process");
           const path = require("path");
           const http = require("http");
 
           let serverProcess;
 
           function startBackend() {
-            const serverScript = path.join(__dirname, "server-bundle.cjs");
-            serverProcess = fork(serverScript, [], {
+            const tsxCli = path.join(__dirname, "node_modules", "tsx", "dist", "cli.mjs");
+            const serverScript = path.join(__dirname, "server.ts");
+            serverProcess = spawn(process.execPath, [tsxCli, serverScript], {
               cwd: __dirname,
               env: {
                 ...process.env,
@@ -73,7 +73,7 @@ jobs:
             });
           }
 
-          function waitForServer(url, retries = 50) {
+          function waitForServer(url, retries = 60) {
             return new Promise((resolve, reject) => {
               const check = (count) => {
                 http.get(url, (res) => {
