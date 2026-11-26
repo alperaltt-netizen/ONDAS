@@ -27,54 +27,46 @@ jobs:
             const fs = require("fs");
             let code = fs.readFileSync("server.ts", "utf8");
 
-            // Reparar posible falta de llave antes de "User-Agent": en fetchWithTimeout
             code = code.replace(
               /fetchWithTimeout\(\s*(`https:\/\/www\.amazon\.com\/s\?k=[^`]+`),\s*\n?\s*"User-Agent":/g,
               "fetchWithTimeout($1,\n      {\n        headers: {\n          \"User-Agent\":"
             );
 
-            // Forzar HOST y PORT desde entorno con fallback a 127.0.0.1 y 3000
-            code = code.replace(
-              /const PORT\s*=\s*3000;[\s\S]*?const HOST\s*=\s*"127\.0\.0\.1";/,
-              "const PORT = Number(process.env.PORT || 3000);\nconst HOST = process.env.HOST || \"127.0.0.1\";"
-            );
-            if (!/process\.env\.PORT/.test(code)) {
+            if (!/import fs from "fs";/.test(code)) {
               code = code.replace(
-                /const PORT\s*=\s*3000;/,
-                "const PORT = Number(process.env.PORT || 3000);\nconst HOST = process.env.HOST || \"127.0.0.1\";"
+                /import express from "express";/,
+                "import express from \"express\";\nimport fs from \"fs\";"
               );
             }
 
-            // Evitar error de comodín en Express 5 y buscar dist en rutas probables
-            const distBlock = `
-              const distCandidates = [
-                path.resolve(__dirname, "dist"),
-                path.resolve(__dirname, "../dist"),
-                path.resolve(process.cwd(), "dist"),
-                path.resolve(process.resourcesPath || "", "app/dist"),
-                path.resolve(process.resourcesPath || "", "dist")
-              ];
-              const distPath = distCandidates.find((p) => fs.existsSync(path.join(p, "index.html"))) || distCandidates[0];
-              console.log("Serving static frontend from:", distPath);
-              app.use(express.static(distPath));
-              app.use((_req, res) => {
-                res.sendFile(path.join(distPath, "index.html"));
-              });
-            `.trim();
+            if (/function resolveDistPath\(\): string \{/.test(code)) {
+              code = code.replace(
+                /const candidates = \[/,
+                "const candidates = [\n    ...(process.env.DIST_PATH ? [process.env.DIST_PATH] : []),"
+              );
+            } else {
+              const distBlock = `
+                const distCandidates = [
+                  ...(process.env.DIST_PATH ? [process.env.DIST_PATH] : []),
+                  path.resolve(__dirname, "dist"),
+                  path.resolve(__dirname, "../dist"),
+                  path.resolve(process.cwd(), "dist"),
+                  path.resolve(process.resourcesPath || "", "app/dist"),
+                  path.resolve(process.resourcesPath || "", "dist")
+                ];
+                const distPath = distCandidates.find((p) => fs.existsSync(path.join(p, "index.html"))) || distCandidates[0];
+                console.log("Serving static frontend from:", distPath);
+                app.use(express.static(distPath));
+                app.use((_req, res) => {
+                  res.sendFile(path.join(distPath, "index.html"));
+                });
+              `.trim();
 
-            if (!/import fs from "fs";/.test(code)) {
-              code = code.replace(/import express from "express";/, "import express from \"express\";\nimport fs from \"fs\";");
+              code = code.replace(
+                /else\s*\{[\s\S]*?app\.(?:get|use)\([\s\S]*?\}\s*\}/,
+                `else {\n    ${distBlock}\n  }`
+              );
             }
-
-            code = code.replace(
-              /else\s*\{[\s\S]*?app\.get\("\*",[\s\S]*?\}\s*\}/,
-              `else {\n    ${distBlock}\n  }`
-            );
-
-            code = code.replace(
-              /app\.listen\(\s*PORT\s*,\s*"0\.0\.0\.0"/,
-              "app.listen(PORT, HOST"
-            );
 
             fs.writeFileSync("server.ts", code, "utf8");
           '
@@ -84,7 +76,6 @@ jobs:
       - name: Preparar aplicación Electron con servidor Express incluido
         run: |
           mkdir -p electron-app
-          cp -r dist electron-app/dist
           cp package.json electron-app/package.json
 
           npx esbuild server.ts --bundle --platform=node --format=esm \
@@ -104,8 +95,17 @@ jobs:
               appId: "com.ondas.player",
               productName: "ONDAS",
               asar: false,
-              files: ["**/*"],
-              win: { target: "portable" }
+              files: ["**/*", "!dist/**"],
+              extraResources: [
+                {
+                  from: "../dist",
+                  to: "dist",
+                  filter: ["**/*"]
+                }
+              ],
+              win: {
+                target: [{ target: "portable", arch: ["x64"] }]
+              }
             };
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
           '
@@ -137,10 +137,19 @@ jobs:
             });
           }
 
+          function resolveFrontendDist() {
+            const resDist = path.join(process.resourcesPath || "", "dist");
+            if (fs.existsSync(path.join(resDist, "index.html"))) {
+              return resDist;
+            }
+            return path.join(__dirname, "dist");
+          }
+
           function startBackend(port) {
             const logPath = getLogPath();
             const out = fs.openSync(logPath, "a");
             const serverScript = path.join(__dirname, "server-bundle.mjs");
+            const distDir = resolveFrontendDist();
 
             serverProcess = spawn(process.execPath, [serverScript], {
               cwd: __dirname,
@@ -149,7 +158,8 @@ jobs:
                 NODE_ENV: "production",
                 ELECTRON_RUN_AS_NODE: "1",
                 HOST: "127.0.0.1",
-                PORT: port
+                PORT: port,
+                DIST_PATH: distDir
               },
               stdio: ["ignore", out, out]
             });
