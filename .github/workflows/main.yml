@@ -1,117 +1,72 @@
-name: Build Portable Windows EXE
+cat << 'EOF' > electron-main.cjs
+const { app, BrowserWindow, dialog } = require("electron");
+const { spawn } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const http = require("http");
 
-on:
-  workflow_dispatch:
-  push:
-    branches: [ main ]
+let serverProcess;
 
-jobs:
-  build:
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
+function startBackend() {
+  const logPath = path.join(app.getPath("userData"), "server.log");
+  const out = fs.openSync(logPath, "a");
+  const tsxCli = path.join(__dirname, "node_modules", "tsx", "dist", "cli.mjs");
+  const serverScript = path.join(__dirname, "server.ts");
 
-    steps:
-      - name: Descargar código
-        uses: actions/checkout@v4
+  serverProcess = spawn(process.execPath, [tsxCli, serverScript], {
+    cwd: __dirname,
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      ELECTRON_RUN_AS_NODE: "1",
+      PORT: process.env.PORT || "3000"
+    },
+    stdio: ["ignore", out, out]
+  });
 
-      - name: Configurar Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
+  serverProcess.on("exit", (code) => {
+    if (code && code !== 0) {
+      dialog.showErrorBox("Error del servidor ONDAS", `El servidor terminó con código ${code}.\nRevisa el log en:\n${logPath}`);
+    }
+  });
+}
 
-      - name: Instalar dependencias y compilar frontend
-        run: |
-          npm install --legacy-peer-deps
-          npm run build
+function waitForServer(url, retries = 60) {
+  return new Promise((resolve, reject) => {
+    const check = (count) => {
+      http.get(url, (res) => {
+        res.resume();
+        resolve();
+      }).on("error", () => {
+        if (count <= 0) return reject(new Error("Tiempo de espera agotado al iniciar el servidor local en " + url));
+        setTimeout(() => check(count - 1), 300);
+      });
+    };
+    check(retries);
+  });
+}
 
-      - name: Preparar aplicación Electron con servidor Express incluido
-        run: |
-          mkdir -p electron-app
-          cp -r dist electron-app/dist
-          cp server.ts electron-app/server.ts
-          cp package.json electron-app/package.json
-          cp -r node_modules electron-app/node_modules
+app.whenReady().then(async () => {
+  try {
+    startBackend();
+    const port = process.env.PORT || "3000";
+    await waitForServer(`http://localhost:${port}`);
 
-          cd electron-app
-          npm install --no-save --no-package-lock --legacy-peer-deps electron electron-builder
+    const win = new BrowserWindow({
+      width: 1150,
+      height: 780,
+      autoHideMenuBar: true,
+      title: "ONDAS"
+    });
+    win.loadURL(`http://localhost:${port}`);
+  } catch (err) {
+    dialog.showErrorBox("Error al iniciar ONDAS", err.message || String(err));
+  }
+});
 
-          node -e '
-            const fs = require("fs");
-            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-            pkg.name = "ondas-player";
-            pkg.main = "electron-main.cjs";
-            pkg.build = {
-              appId: "com.ondas.player",
-              productName: "ONDAS",
-              asar: false,
-              win: { target: "portable" }
-            };
-            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
-          '
-
-          cat << 'EOF' > electron-main.cjs
-          const { app, BrowserWindow } = require("electron");
-          const { spawn } = require("child_process");
-          const path = require("path");
-          const http = require("http");
-
-          let serverProcess;
-
-          function startBackend() {
-            const tsxCli = path.join(__dirname, "node_modules", "tsx", "dist", "cli.mjs");
-            const serverScript = path.join(__dirname, "server.ts");
-            serverProcess = spawn(process.execPath, [tsxCli, serverScript], {
-              cwd: __dirname,
-              env: {
-                ...process.env,
-                NODE_ENV: "production",
-                ELECTRON_RUN_AS_NODE: "1"
-              },
-              stdio: "ignore"
-            });
-          }
-
-          function waitForServer(url, retries = 60) {
-            return new Promise((resolve, reject) => {
-              const check = (count) => {
-                http.get(url, (res) => {
-                  res.resume();
-                  resolve();
-                }).on("error", () => {
-                  if (count <= 0) return reject(new Error("Tiempo de espera agotado al iniciar el servidor local"));
-                  setTimeout(() => check(count - 1), 300);
-                });
-              };
-              check(retries);
-            });
-          }
-
-          app.whenReady().then(async () => {
-            startBackend();
-            await waitForServer("http://localhost:3000");
-
-            const win = new BrowserWindow({
-              width: 1150,
-              height: 780,
-              autoHideMenuBar: true,
-              title: "ONDAS"
-            });
-            win.loadURL("http://localhost:3000");
-          });
-
-          app.on("will-quit", () => {
-            if (serverProcess) {
-              serverProcess.kill();
-            }
-          });
-          EOF
-
-          npx electron-builder --win portable
-
-      - name: Subir el EXE portable
-        uses: actions/upload-artifact@v4
-        with:
-          name: ONDAS-Portable-Windows
-          path: electron-app/dist/*.exe
+app.on("will-quit", () => {
+  if (serverProcess) {
+    serverProcess.kill();
+  }
+});
+EOF
