@@ -49,6 +49,7 @@ jobs:
               appId: "com.ondas.player",
               productName: "ONDAS",
               asar: false,
+              files: ["**/*"],
               win: { target: "portable" }
             };
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
