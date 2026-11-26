@@ -8,6 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = 3000;
+const HOST = "127.0.0.1";
 
 type CoverSourceKey = "google" | "amazon" | "deezer" | "apple" | "musicbrainz";
 
@@ -254,7 +255,6 @@ async function searchViaAmazonAndAudible(query: string): Promise<CoverResult[]> 
     let match: RegExpExecArray | null;
     while ((match = regex.exec(html)) !== null && results.length < 10) {
       let imgUrl = match[0];
-      // Upgrade low-res Amazon thumbnails to crisp 600px square/cover resolution
       imgUrl = imgUrl.replace(/\._[A-Z0-9_,]+_\./i, "._SL600_.");
       if (
         imgUrl.includes("sprite") ||
@@ -314,7 +314,6 @@ async function searchViaAmazonAndAudible(query: string): Promise<CoverResult[]> 
         // Ignore Audible timeout
       }
     })(),
-    // Also query Google Images specifically scoped to Amazon / Audible covers
     (async () => {
       const amazonViaGoogle = await searchViaGoogleImagesHtml(
         query,
@@ -380,7 +379,6 @@ async function searchViaDeezer(
     }
 
     if (byAuthorOnly) {
-      // Also fetch albums by this artist on Deezer
       const albRes = await fetchWithTimeout(
         `https://api.deezer.com/search/album?q=artist:"${encodeURIComponent(
           query
@@ -692,7 +690,6 @@ async function startServer() {
         searchViaMusicBrainz(effectiveQuery, byAuthorOnly),
       ]);
 
-      // Interleave results across sources so Google, Amazon, Deezer, Apple, MusicBrainz all appear prominently
       const buckets = [
         appleResults,
         amazonResults,
@@ -800,13 +797,13 @@ async function startServer() {
   } else {
     const distPath = path.resolve(__dirname, "dist");
     app.use(express.static(distPath));
-    app.get("*", (_req, res) => {
+    app.use((_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Ondas server running at http://localhost:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`Ondas server running at http://${HOST}:${PORT}`);
   });
 }
 
