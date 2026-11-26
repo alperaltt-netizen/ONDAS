@@ -21,8 +21,63 @@ jobs:
         with:
           node-version: 22
 
-      - name: Instalar dependencias y compilar frontend
+      - name: Corregir server.ts y compilar frontend
         run: |
+          node -e '
+            const fs = require("fs");
+            let code = fs.readFileSync("server.ts", "utf8");
+
+            // Reparar posible falta de llave antes de "User-Agent": en fetchWithTimeout
+            code = code.replace(
+              /fetchWithTimeout\(\s*(`https:\/\/www\.amazon\.com\/s\?k=[^`]+`),\s*\n?\s*"User-Agent":/g,
+              "fetchWithTimeout($1,\n      {\n        headers: {\n          \"User-Agent\":"
+            );
+
+            // Forzar HOST y PORT desde entorno con fallback a 127.0.0.1 y 3000
+            code = code.replace(
+              /const PORT\s*=\s*3000;[\s\S]*?const HOST\s*=\s*"127\.0\.0\.1";/,
+              "const PORT = Number(process.env.PORT || 3000);\nconst HOST = process.env.HOST || \"127.0.0.1\";"
+            );
+            if (!/process\.env\.PORT/.test(code)) {
+              code = code.replace(
+                /const PORT\s*=\s*3000;/,
+                "const PORT = Number(process.env.PORT || 3000);\nconst HOST = process.env.HOST || \"127.0.0.1\";"
+              );
+            }
+
+            // Evitar error de comodín en Express 5 y buscar dist en rutas probables
+            const distBlock = `
+              const distCandidates = [
+                path.resolve(__dirname, "dist"),
+                path.resolve(__dirname, "../dist"),
+                path.resolve(process.cwd(), "dist"),
+                path.resolve(process.resourcesPath || "", "app/dist"),
+                path.resolve(process.resourcesPath || "", "dist")
+              ];
+              const distPath = distCandidates.find((p) => fs.existsSync(path.join(p, "index.html"))) || distCandidates[0];
+              console.log("Serving static frontend from:", distPath);
+              app.use(express.static(distPath));
+              app.use((_req, res) => {
+                res.sendFile(path.join(distPath, "index.html"));
+              });
+            `.trim();
+
+            if (!/import fs from "fs";/.test(code)) {
+              code = code.replace(/import express from "express";/, "import express from \"express\";\nimport fs from \"fs\";");
+            }
+
+            code = code.replace(
+              /else\s*\{[\s\S]*?app\.get\("\*",[\s\S]*?\}\s*\}/,
+              `else {\n    ${distBlock}\n  }`
+            );
+
+            code = code.replace(
+              /app\.listen\(\s*PORT\s*,\s*"0\.0\.0\.0"/,
+              "app.listen(PORT, HOST"
+            );
+
+            fs.writeFileSync("server.ts", code, "utf8");
+          '
           npm install --legacy-peer-deps
           npm run build
 
