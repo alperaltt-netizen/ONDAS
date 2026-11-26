@@ -30,9 +30,11 @@ jobs:
         run: |
           mkdir -p electron-app
           cp -r dist electron-app/dist
-          cp server.ts electron-app/server.ts
           cp package.json electron-app/package.json
-          cp -r node_modules electron-app/node_modules
+
+          npx esbuild server.ts --bundle --platform=node --format=esm \
+            --external:vite --external:@vitejs/devtools/config --external:lightningcss --external:esbuild \
+            --outfile=electron-app/server-bundle.mjs
 
           cd electron-app
           npm install --no-save --no-package-lock --legacy-peer-deps electron electron-builder
@@ -60,13 +62,16 @@ jobs:
 
           let serverProcess;
 
-          function startBackend() {
-            const logPath = path.join(app.getPath("userData"), "server.log");
-            const out = fs.openSync(logPath, "a");
-            const tsxCli = path.join(__dirname, "node_modules", "tsx", "dist", "cli.mjs");
-            const serverScript = path.join(__dirname, "server.ts");
+          function getLogPath() {
+            return path.join(app.getPath("userData"), "server.log");
+          }
 
-            serverProcess = spawn(process.execPath, [tsxCli, serverScript], {
+          function startBackend() {
+            const logPath = getLogPath();
+            const out = fs.openSync(logPath, "a");
+            const serverScript = path.join(__dirname, "server-bundle.mjs");
+
+            serverProcess = spawn(process.execPath, [serverScript], {
               cwd: __dirname,
               env: {
                 ...process.env,
@@ -79,19 +84,26 @@ jobs:
 
             serverProcess.on("exit", (code) => {
               if (code && code !== 0) {
-                dialog.showErrorBox("Error del servidor ONDAS", `El servidor terminó con código ${code}.\nRevisa el log en:\n${logPath}`);
+                dialog.showErrorBox("Error del servidor ONDAS", `El servidor terminó con código ${code}.\nLog: ${logPath}`);
               }
             });
           }
 
-          function waitForServer(url, retries = 60) {
+          function waitForServer(url, retries = 150) {
             return new Promise((resolve, reject) => {
               const check = (count) => {
                 http.get(url, (res) => {
                   res.resume();
                   resolve();
                 }).on("error", () => {
-                  if (count <= 0) return reject(new Error("Tiempo de espera agotado al iniciar el servidor local en " + url));
+                  if (count <= 0) {
+                    let tail = "";
+                    try {
+                      const content = fs.readFileSync(getLogPath(), "utf8");
+                      tail = content.slice(-600);
+                    } catch (_) {}
+                    return reject(new Error(`Tiempo de espera agotado en ${url}\n\nÚltimo log:\n${tail || "(vacío)"}`));
+                  }
                   setTimeout(() => check(count - 1), 300);
                 });
               };
