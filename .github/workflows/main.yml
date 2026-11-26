@@ -30,9 +30,9 @@ jobs:
         run: |
           mkdir -p electron-app
           cp -r dist electron-app/dist
-          cp server.ts electron-app/server.ts
           cp package.json electron-app/package.json
-          cp -r node_modules electron-app/node_modules
+
+          npx esbuild server.ts --bundle --platform=node --format=cjs --outfile=electron-app/server-bundle.cjs
 
           cd electron-app
           npm install --no-save --no-package-lock --legacy-peer-deps electron electron-builder
@@ -46,6 +46,7 @@ jobs:
             pkg.build = {
               appId: "com.ondas.player",
               productName: "ONDAS",
+              asarUnpack: ["server-bundle.cjs"],
               win: { target: "portable" }
             };
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
@@ -53,23 +54,26 @@ jobs:
 
           cat << 'EOF' > electron-main.cjs
           const { app, BrowserWindow } = require("electron");
-          const { spawn } = require("child_process");
+          const { fork } = require("child_process");
           const path = require("path");
           const http = require("http");
 
           let serverProcess;
 
           function startBackend() {
-            const tsxBin = path.join(__dirname, "node_modules", ".bin", "tsx.cmd");
-            const serverScript = path.join(__dirname, "server.ts");
-            serverProcess = spawn(tsxBin, [serverScript], {
+            const serverScript = path.join(__dirname, "server-bundle.cjs");
+            serverProcess = fork(serverScript, [], {
               cwd: __dirname,
-              env: { ...process.env, NODE_ENV: "production" },
-              shell: true
+              env: {
+                ...process.env,
+                NODE_ENV: "production",
+                ELECTRON_RUN_AS_NODE: "1"
+              },
+              stdio: "ignore"
             });
           }
 
-          function waitForServer(url, retries = 40) {
+          function waitForServer(url, retries = 50) {
             return new Promise((resolve, reject) => {
               const check = (count) => {
                 http.get(url, (res) => {
